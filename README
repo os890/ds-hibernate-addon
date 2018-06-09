@@ -1,0 +1,2 @@
+Prototype which gets active autom. and switches the hibernate-session to FlushMode.MANUAL
+if @Transactional(readOnly = true) is used (including the support of nested constellations)

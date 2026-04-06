@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements. See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership. The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 package org.os890.ds.addon.hibernate.impl;
 
 import org.apache.deltaspike.core.util.ProxyUtils;
@@ -6,27 +25,35 @@ import org.apache.deltaspike.jpa.impl.transaction.EnvironmentAwareTransactionStr
 import org.apache.deltaspike.jpa.impl.transaction.context.EntityManagerEntry;
 import org.hibernate.FlushMode;
 import org.hibernate.Session;
-import org.hibernate.ejb.HibernateEntityManager;
 
-import javax.annotation.Priority;
-import javax.enterprise.context.Dependent;
-import javax.enterprise.inject.Alternative;
-import javax.enterprise.inject.Any;
-import javax.enterprise.inject.spi.BeanManager;
-import javax.inject.Inject;
-import javax.interceptor.InvocationContext;
-import javax.persistence.EntityTransaction;
+import jakarta.annotation.Priority;
+import jakarta.enterprise.context.Dependent;
+import jakarta.enterprise.inject.Alternative;
+import jakarta.enterprise.inject.Any;
+import jakarta.enterprise.inject.spi.BeanManager;
+import jakarta.inject.Inject;
+import jakarta.interceptor.InvocationContext;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Stack;
 
-import static javax.interceptor.Interceptor.Priority.LIBRARY_BEFORE;
+import static jakarta.interceptor.Interceptor.Priority.LIBRARY_BEFORE;
 
+/**
+ * DeltaSpike transaction strategy that switches the Hibernate session to
+ * {@link FlushMode#MANUAL} when {@code @Transactional(readOnly = true)}
+ * is used, including support for nested transaction constellations.
+ *
+ * <p>This strategy automatically activates as a CDI {@link Alternative}
+ * with priority {@code LIBRARY_BEFORE}.</p>
+ */
 @Dependent
 @Priority(LIBRARY_BEFORE)
 @Alternative
 public class HibernateAwareTransactionStrategy extends EnvironmentAwareTransactionStrategy {
+
     @Inject
     private BeanManager beanManager;
 
@@ -56,10 +83,12 @@ public class HibernateAwareTransactionStrategy extends EnvironmentAwareTransacti
     }
 
     @Override
-    protected void beforeProceed(InvocationContext invocationContext, EntityManagerEntry entityManagerEntry, EntityTransaction transaction) {
+    protected void beforeProceed(InvocationContext invocationContext,
+                                 EntityManagerEntry entityManagerEntry,
+                                 jakarta.persistence.EntityTransaction transaction) {
         super.beforeProceed(invocationContext, entityManagerEntry, transaction);
 
-        Class targetClass = ProxyUtils.getUnproxiedClass(invocationContext.getTarget().getClass());
+        Class<?> targetClass = ProxyUtils.getUnproxiedClass(invocationContext.getTarget().getClass());
         if (targetClass == null) {
             targetClass = invocationContext.getMethod().getDeclaringClass();
         }
@@ -68,20 +97,25 @@ public class HibernateAwareTransactionStrategy extends EnvironmentAwareTransacti
         entityManagerMetadata.readFrom(targetClass, beanManager);
         entityManagerMetadata.readFrom(invocationContext.getMethod(), beanManager);
 
-        Session hibernateSession = entityManagerEntry.getEntityManager().unwrap(HibernateEntityManager.class).getSession();
-        FlushMode flushModeBefore = hibernateSession.getFlushMode();
+        Session hibernateSession = entityManagerEntry.getEntityManager().unwrap(Session.class);
+        FlushMode flushModeBefore = hibernateSession.getHibernateFlushMode();
 
         if (entityManagerMetadata.isReadOnly()) {
-            if (entityManagerMetadata.getQualifiers().length == 1 && Any.class.equals(entityManagerMetadata.getQualifiers()[0]) ||
-                Arrays.asList(entityManagerMetadata.getQualifiers()).contains(entityManagerEntry.getQualifier())) {
-                hibernateSession.setFlushMode(FlushMode.MANUAL);
+            if (entityManagerMetadata.getQualifiers().length == 1 && Any.class.equals(entityManagerMetadata.getQualifiers()[0])
+                    || Arrays.asList(entityManagerMetadata.getQualifiers()).contains(entityManagerEntry.getQualifier())) {
+                hibernateSession.setHibernateFlushMode(FlushMode.MANUAL);
             }
         }
 
         flushModeEntryStack.get().peek().add(new FlushModeEntry(hibernateSession, flushModeBefore));
     }
 
+    /**
+     * Holds a reference to a Hibernate session and its original flush mode
+     * so it can be restored after the transaction completes.
+     */
     private class FlushModeEntry {
+
         private final Session hibernateSession;
         private final FlushMode flushModeBefore;
 
@@ -91,8 +125,8 @@ public class HibernateAwareTransactionStrategy extends EnvironmentAwareTransacti
         }
 
         void restoreFlushMode() {
-            if (hibernateSession.isOpen() && !hibernateSession.getFlushMode().equals(flushModeBefore)) {
-                hibernateSession.setFlushMode(flushModeBefore);
+            if (hibernateSession.isOpen() && !hibernateSession.getHibernateFlushMode().equals(flushModeBefore)) {
+                hibernateSession.setHibernateFlushMode(flushModeBefore);
             }
         }
     }
